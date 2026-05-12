@@ -21,56 +21,65 @@ def process_acc(pdf_file):
             
         final_df = pd.concat(all_data, ignore_index=True)
         
-        # البحث التلقائي عن السطر الذي يحتوي على كلمة Ticket
-        ticket_col = None
+        # البحث الذكي عن رأس الجدول وتجنب الأخطاء
+        ticket_col_index = None
+        header_row_index = None
+        
         for index, row in final_df.iterrows():
-            row_str = row.astype(str).values
-            for i, cell in enumerate(row_str):
+            # تحويل الصف لنصوص مع تجاهل القيم الفارغة
+            row_values = [str(val) if val is not None else "" for val in row]
+            for i, cell in enumerate(row_values):
                 if 'Ticket' in cell:
-                    final_df.columns = final_df.iloc[index]
-                    final_df = final_df.iloc[index+1:].reset_index(drop=True)
-                    ticket_col = cell
+                    header_row_index = index
+                    ticket_col_index = i
                     break
-            if ticket_col: break
+            if header_row_index is not None: break
             
-        return final_df
+        if header_row_index is not None:
+            # تعيين الصف الذي وجدنا فيه كلمة Ticket كعنوان للأعمدة
+            final_df.columns = final_df.iloc[header_row_index]
+            final_df = final_df.iloc[header_row_index+1:].reset_index(drop=True)
+            return final_df
+        return None
 
 def process_bsp(pdf_file):
     with pdfplumber.open(pdf_file) as pdf:
         text = ""
         for page in pdf.pages:
-            text += page.extract_text()
-        pattern = r"(\d{3})\sTKTT\s(\d{10})\s(\d{2}\w{3}\d{2}).*?([\d,]+\.\d{2})"
+            text += page.extract_text() or ""
+        # نمط البحث عن التذاكر في ملف BSP
+        pattern = r"(\d{3})\sTKTT\s(\d{10})"
         matches = re.findall(pattern, text)
-        return pd.DataFrame(matches, columns=['AirCode', 'Ticket', 'Date', 'Net_BSP'])
+        return pd.DataFrame(matches, columns=['AirCode', 'Ticket'])
 
-acc_file = st.file_uploader("ارفع ملف الحسابات", type="pdf")
-bsp_file = st.file_uploader("ارفع ملف الـ BSP", type="pdf")
+acc_file = st.file_uploader("ارفع ملف الحسابات (PDF)", type="pdf")
+bsp_file = st.file_uploader("ارفع ملف الـ BSP (PDF)", type="pdf")
 
 if acc_file and bsp_file:
-    df_acc = process_acc(acc_file)
-    df_bsp = process_bsp(bsp_file)
+    with st.spinner('جاري معالجة الملفات...'):
+        df_acc = process_acc(acc_file)
+        df_bsp = process_bsp(bsp_file)
 
-    if df_acc is not None:
-        # محاولة إيجاد اسم العمود الصحيح لرقم التذكرة
-        acc_col = [c for c in df_acc.columns if 'Ticket' in str(c)]
-        price_col = [c for c in df_acc.columns if 'Net' in str(c) or 'Payable' in str(c)]
-        
-        if acc_col:
-            df_acc['Ticket_Clean'] = df_acc[acc_col[0]].astype(str).str.replace(r'\s+', '', regex=True)
-            df_bsp['Ticket'] = df_bsp['Ticket'].astype(str)
+        if df_acc is not None and not df_bsp.empty:
+            # تنظيف أرقام التذاكر من الفراغات
+            acc_ticket_col = [c for c in df_acc.columns if c and 'Ticket' in str(c)][0]
+            df_acc['Ticket_Clean'] = df_acc[acc_ticket_col].astype(str).str.replace(r'\s+', '', regex=True)
+            df_bsp['Ticket'] = df_bsp['Ticket'].astype(str).str.replace(r'\s+', '', regex=True)
 
-            # المقارنة
+            # المقارنة: تذاكر في BSP وغير موجودة في الحسابات
             missing_in_acc = df_bsp[~df_bsp['Ticket'].isin(df_acc['Ticket_Clean'])]
             
             st.divider()
-            st.subheader("نتائج الفحص")
-            t1, t2 = st.tabs(["❌ مفقود في الحسابات", "✅ البيانات المطابقة"])
+            st.subheader("📊 ملخص الفحص")
             
-            with t1:
-                st.warning(f"تذاكر موجودة في BSP وغير مسجلة عندك: {len(missing_in_acc)}")
-                st.dataframe(missing_in_acc)
-            with t2:
-                st.success("تم الربط بنجاح، يمكنك الآن مراجعة باقي البيانات")
+            col1, col2 = st.columns(2)
+            col1.metric("تذاكر في BSP", len(df_bsp))
+            col2.metric("تذاكر مفقودة من حساباتك", len(missing_in_acc))
+
+            st.subheader("❌ التذاكر المفقودة (موجودة في BSP فقط)")
+            if not missing_in_acc.empty:
+                st.dataframe(missing_in_acc, use_container_width=True)
+            else:
+                st.success("ممتاز! جميع تذاكر BSP مسجلة في حساباتك.")
         else:
-            st.error("لم أتمكن من العثور على عمود 'Ticket No' في ملف الحسابات. تأكد من جودة الملف.")
+            st.error("تعذر قراءة البيانات. تأكد أن الملفات تحتوي على جداول واضحة.")
