@@ -4,46 +4,49 @@ import pdfplumber
 import re
 
 st.set_page_config(page_title="One Way Tours - Auditor", layout="wide")
-st.title("✈️ One Way Tours - نظام المطابقة الذكي")
+st.title("✈️ One Way Tours - نظام المطابقة الاحترافي")
 
-def extract_tickets_from_pdf(pdf_file):
+def extract_all_numbers(pdf_file):
+    all_text = ""
     tickets = set()
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
             if text:
-                # البحث عن أي رقم مكون من 10 أو 13 رقم (لتغطية كافة أشكال التذاكر)
-                found = re.findall(r'\b\d{10,13}\b', text)
+                all_text += text + " "
+                # البحث عن أي تتابع للأرقام بين 10 و 14 رقم
+                found = re.findall(r'\d{10,14}', text)
                 for t in found:
-                    # نأخذ آخر 10 أرقام دائماً لتوحيد الشكل
-                    tickets.add(t[-10:])
-    return tickets
+                    tickets.add(t[-10:]) # نأخذ آخر 10 أرقام دائماً
+    return tickets, all_text
 
-acc_file = st.file_uploader("(PDF) ارفع ملف الحسابات", type="pdf")
-bsp_file = st.file_uploader("(PDF) BSP ارفع ملف الـ", type="pdf")
+acc_file = st.file_uploader("ارفع ملف الحسابات", type="pdf")
+bsp_file = st.file_uploader("ارفع ملف الـ BSP", type="pdf")
 
 if acc_file and bsp_file:
-    with st.spinner('جاري فحص التذاكر بدقة...'):
-        acc_tickets = extract_tickets_from_pdf(acc_file)
-        bsp_tickets = extract_tickets_from_pdf(bsp_file)
+    with st.spinner('جاري المسح العميق للملفات...'):
+        acc_tickets, acc_raw = extract_all_numbers(acc_file)
+        bsp_tickets, bsp_raw = extract_all_numbers(bsp_file)
         
         if bsp_tickets:
-            missing_in_acc = [t for t in bsp_tickets if t not in acc_tickets]
+            missing = [t for t in bsp_tickets if t not in acc_tickets]
             
             st.divider()
-            c1, c2, c3 = st.columns(3)
-            c1.metric("إجمالي تذاكر BSP", len(bsp_tickets))
-            c2.metric("تذاكر مسجلة بالحسابات", len(acc_tickets))
-            c3.metric("تذاكر مفقودة", len(missing_in_acc))
+            col1, col2, col3 = st.columns(3)
+            col1.metric("تذاكر تم اكتشافها في BSP", len(bsp_tickets))
+            col2.metric("تذاكر مسجلة بالحسابات", len(acc_tickets))
+            col3.metric("تذاكر مفقودة", len(missing))
             
-            if missing_in_acc:
-                st.subheader("❌ التذاكر المفقودة من الحسابات")
-                df_missing = pd.DataFrame(missing_in_acc, columns=["رقم التذكرة"])
-                st.table(df_missing)
+            if missing:
+                st.subheader("❌ قائمة التذاكر المفقودة")
+                df_missing = pd.DataFrame(missing, columns=["رقم التذكرة"])
+                st.dataframe(df_missing, use_container_width=True)
                 
                 csv = df_missing.to_csv(index=False).encode('utf-8-sig')
-                st.download_button("تحميل القائمة CSV", csv, "missing_tickets.csv", "text/csv")
+                st.download_button("تحميل التقرير CSV", csv, "missing_tickets.csv")
             else:
-                st.success("✅ مبروك! كل تذاكر الـ BSP موجودة في حساباتك.")
+                st.success("✅ تطابق كامل! كل التذاكر مسجلة.")
         else:
-            st.error("لم أتمكن من العثور على أرقام تذاكر. تأكد من أن الملف ليس 'صورة' (Scanner).")
+            st.error("⚠️ لم يتم العثور على أرقام في ملف BSP.")
+            with st.expander("معاينة النص الذي رآه البرنامج في ملف BSP (للتصحيح)"):
+                st.write(bsp_raw[:1000] if bsp_raw else "الملف فارغ تماماً أو عبارة عن صورة (Scanner)")
